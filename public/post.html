@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Post — Localhost</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a class="logo" href="/">Localhost</a>
+      <nav id="auth-area"></nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <article class="article" id="article"></article>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    (async () => {
+      const id = new URLSearchParams(location.search).get('id');
+      const article = document.getElementById('article');
+      try {
+        const p = await api('/api/posts/' + encodeURIComponent(id));
+        document.title = p.title + ' — Localhost';
+        const me = await getMe();
+        const isMine = me && p.author.username === me.username;
+        const authorLink = p.author.username
+          ? `<a href="/profile.html?u=${encodeURIComponent(p.author.username)}">${escapeHtml(p.author.name)}</a>`
+          : escapeHtml(p.author.name);
+        article.innerHTML = `
+          <h1>${escapeHtml(p.title)}</h1>
+          ${p.subtitle ? `<p class="subtitle">${escapeHtml(p.subtitle)}</p>` : ''}
+          <div class="byline">
+            <div class="avatar">${escapeHtml(p.author.name.charAt(0).toUpperCase())}</div>
+            <div>${authorLink}<br>
+            <span style="color:#6b6b6b">${formatDate(p.createdAt)} &middot; ${p.readingTime} min read</span></div>
+          </div>
+          <div class="body">${p.bodyHtml}</div>
+          <div class="clap-row">
+            <button class="clap-btn" id="clap-btn" type="button" title="Clap for this post">&#128079;</button>
+            <span id="clap-count">${p.claps} clap${p.claps === 1 ? '' : 's'}</span>
+            ${isMine ? `<span style="margin-left:auto"><a class="btn btn-ghost" href="/write.html?id=${p.id}">Edit</a>
+              <button class="btn btn-danger" id="delete-btn" type="button">Delete</button></span>` : ''}
+          </div>
+          <p class="error" id="post-error"></p>`;
+
+        const clapBtn = document.getElementById('clap-btn');
+        if (p.clappedBy.includes(me && me.id)) clapBtn.classList.add('clapped');
+        clapBtn.addEventListener('click', async () => {
+          if (!me) { location.href = '/auth.html'; return; }
+          try {
+            const r = await api('/api/posts/' + p.id + '/clap', { method: 'POST' });
+            document.getElementById('clap-count').textContent = r.claps + ' clap' + (r.claps === 1 ? '' : 's');
+            if (r.clapped) clapBtn.classList.add('clapped');
+          } catch (e) {
+            document.getElementById('post-error').textContent = e.message;
+          }
+        });
+
+        const delBtn = document.getElementById('delete-btn');
+        if (delBtn) delBtn.addEventListener('click', async () => {
+          if (!confirm('Delete this post?')) return;
+          await api('/api/posts/' + p.id, { method: 'DELETE' });
+          location.href = '/';
+        });
+      } catch (e) {
+        article.innerHTML = `<p class="error">${escapeHtml(e.message)}</p>`;
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Write — Localhost</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a class="logo" href="/">Localhost</a>
+      <nav id="auth-area"></nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="editor">
+      <div class="field">
+        <input class="title-input" id="title" type="text" placeholder="Title" autocomplete="off">
+      </div>
+      <div class="field">
+        <input id="subtitle" type="text" placeholder="Subtitle (optional)" autocomplete="off">
+      </div>
+      <div class="field">
+        <textarea class="body-input" id="body" placeholder="Tell your story..."></textarea>
+        <p class="hint">The body is Markdown — **bold**, *italic*, # headings, [links](https://example.com), and code all work.</p>
+      </div>
+      <p class="error" id="write-error"></p>
+      <button class="btn" id="publish-btn" type="button">Publish</button>
+      <button class="btn btn-ghost" id="draft-btn" type="button">Save draft</button>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    (async () => {
+      const me = await getMe();
+      if (!me) { location.href = '/auth.html'; return; }
+
+      const params = new URLSearchParams(location.search);
+      const editId = params.get('id');
+      const titleEl = document.getElementById('title');
+      const subtitleEl = document.getElementById('subtitle');
+      const bodyEl = document.getElementById('body');
+      const errorEl = document.getElementById('write-error');
+
+      // Editing an existing post? Load it into the form.
+      if (editId) {
+        try {
+          const p = await api('/api/posts/' + encodeURIComponent(editId));
+          titleEl.value = p.title;
+          subtitleEl.value = p.subtitle;
+          bodyEl.value = p.body;
+          document.getElementById('publish-btn').textContent = 'Publish changes';
+        } catch (e) {
+          errorEl.textContent = e.message;
+        }
+      }
+
+      async function save(status) {
+        errorEl.textContent = '';
+        const payload = {
+          title: titleEl.value.trim(),
+          subtitle: subtitleEl.value.trim(),
+          body: bodyEl.value,
+          status,
+        };
+        try {
+          let post;
+          if (editId) {
+            post = await api('/api/posts/' + encodeURIComponent(editId), {
+              method: 'PUT',
+              body: JSON.stringify(payload),
+            });
+          } else {
+            post = await api('/api/posts', {
+              method: 'POST',
+              body: JSON.stringify(payload),
+            });
+          }
+          location.href = status === 'published'
+            ? '/post.html?id=' + post.id
+            : '/profile.html?u=' + encodeURIComponent(me.username);
+        } catch (e) {
+          errorEl.textContent = e.message;
+        }
+      }
+
+      document.getElementById('publish-btn').addEventListener('click', () => save('published'));
+      document.getElementById('draft-btn').addEventListener('click', () => save('draft'));
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in — Localhost</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a class="logo" href="/">Localhost</a>
+      <nav id="auth-area"></nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="auth-card">
+      <h1 id="auth-title">Welcome back.</h1>
+      <form id="auth-form">
+        <div class="field" id="name-field" style="display:none">
+          <label for="name">Your name</label>
+          <input id="name" type="text" autocomplete="name" placeholder="Kim Maddox">
+        </div>
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" type="text" autocomplete="username" placeholder="kim">
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" placeholder="At least 6 characters">
+        </div>
+        <p class="error" id="auth-error"></p>
+        <button class="btn" id="auth-submit" type="submit" style="width:100%">Sign in</button>
+      </form>
+      <p class="switch" id="auth-switch"></p>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    (() => {
+      const mode = new URLSearchParams(location.search).get('mode') === 'signup' ? 'signup' : 'login';
+      const title = document.getElementById('auth-title');
+      const submit = document.getElementById('auth-submit');
+      const nameField = document.getElementById('name-field');
+      const switchEl = document.getElementById('auth-switch');
+      const errorEl = document.getElementById('auth-error');
+
+      if (mode === 'signup') {
+        title.textContent = 'Join Localhost.';
+        submit.textContent = 'Create account';
+        nameField.style.display = 'block';
+        switchEl.innerHTML = 'Already have an account? <a href="/auth.html">Sign in</a>';
+      } else {
+        title.textContent = 'Welcome back.';
+        submit.textContent = 'Sign in';
+        switchEl.innerHTML = 'No account yet? <a href="/auth.html?mode=signup">Create one</a>';
+      }
+
+      document.getElementById('auth-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        errorEl.textContent = '';
+        const body = {
+          name: document.getElementById('name').value.trim(),
+          username: document.getElementById('username').value.trim(),
+          password: document.getElementById('password').value,
+        };
+        try {
+          await api(mode === 'signup' ? '/api/auth/signup' : '/api/auth/login', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          });
+          location.href = '/';
+        } catch (err) {
+          errorEl.textContent = err.message;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+{"dependencies":{"bcryptjs":"^2.4.3","express":"^4.19.2","marked":"^12.0.0"},"description":"A tiny Medium clone that runs entirely on your laptop. Built to learn how servers work: Express + a JSON file database + cookie sessions. No cloud, no accounts, no build step.","license":"MIT","main":"server.js","name":"medium-clone","scripts":{"start":"node server.js"},"version":"1.0.0"}

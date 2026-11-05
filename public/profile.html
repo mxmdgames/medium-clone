@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Profile — Localhost</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a class="logo" href="/">Localhost</a>
+      <nav id="auth-area"></nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="profile"></div>
+    <div id="drafts"></div>
+    <div id="posts"></div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    (async () => {
+      const username = new URLSearchParams(location.search).get('u');
+      const profileEl = document.getElementById('profile');
+      const postsEl = document.getElementById('posts');
+      const draftsEl = document.getElementById('drafts');
+      try {
+        const { user, posts } = await api('/api/users/' + encodeURIComponent(username));
+        document.title = user.name + ' — Localhost';
+        profileEl.innerHTML = `
+          <div style="display:flex; gap:16px; align-items:center; margin-bottom:32px">
+            <div class="avatar" style="width:64px; height:64px; font-size:28px">${escapeHtml(user.name.charAt(0).toUpperCase())}</div>
+            <div>
+              <h1 style="margin:0; font-size:28px">${escapeHtml(user.name)}</h1>
+              <div style="color:#6b6b6b">@${escapeHtml(user.username)} &middot; joined ${formatDate(user.createdAt)}</div>
+            </div>
+          </div>`;
+
+        const me = await getMe();
+        if (me && me.username === user.username) {
+          const mine = await api('/api/posts/mine');
+          const drafts = mine.filter((p) => p.status === 'draft');
+          if (drafts.length) {
+            draftsEl.innerHTML = '<h2 class="serif">Your drafts</h2>' +
+              drafts.map((p) =>
+                `<div class="post-card"><h2><a href="/write.html?id=${p.id}">${escapeHtml(p.title) || '(untitled)'}</a></h2>
+                 <div class="foot"><span>Draft</span><span><a href="/write.html?id=${p.id}">Continue editing</a></span></div></div>`
+              ).join('');
+          }
+        }
+
+        postsEl.innerHTML = posts.length
+          ? posts.map(postCard).join('')
+          : '<p class="empty">No published posts yet.</p>';
+      } catch (e) {
+        profileEl.innerHTML = `<p class="error">${escapeHtml(e.message)}</p>`;
+      }
+    })();
+  </script>
+</body>
+</html>
