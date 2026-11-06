@@ -38,19 +38,21 @@ Trace one feed load, end to end:
 4. The inline script in `index.html` calls `api('/api/posts')` — a `fetch()`
    to `GET /api/posts`.
 5. Express matches the `app.get('/api/posts', ...)` route in `server.js`.
-6. The route calls `db.load()`, which reads `data/db.json` from disk.
-7. It filters to published posts, sorts newest first, and renders each
-   post's Markdown to HTML with `marked`.
+6. The route calls `db.listPublishedPosts()`, which runs one SQL query
+   against Postgres (see lesson 4) and gets the rows back.
+7. `server.js` renders each post's Markdown to HTML with `marked`.
 8. Express sends the array back as JSON.
 9. `app.js` turns each post into HTML (`postCard()`) and puts it on the page.
 
 Two things worth noticing:
 
 - **The frontend and backend only talk through the API.** The page never
-  touches the database directly. If you replaced the JSON file with Postgres
-  tomorrow, the frontend would not change at all.
-- **The server re-reads the file on every request.** Simple and easy to
-  understand, slow at scale. Real apps keep a database connection open.
+  touches the database directly. If you replaced Postgres with something
+  else tomorrow, the frontend would not change at all.
+- **The server asks the database only for what it needs.** The SQL says
+  "published posts, newest first" and Postgres does the filtering and
+  sorting — the old JSON version loaded everything and filtered in
+  JavaScript.
 
 Try it yourself: open DevTools (F12), Network tab, refresh, and click the
 `/api/posts` request to see the raw JSON.
@@ -78,25 +80,65 @@ can bypass that), but on the server.
 
 ---
 
-## 4. The database: a JSON file now, SQLite later
+## 4. The database: PostgreSQL
 
-`data/db.json` is a real database in the only sense that matters: it stores
-data durably and the app reads and writes it. It is also a terrible database
-in every other sense:
+The first version of this project stored everything in one JSON file.
+It worked, and it was easy to see — but it had real limits: every read
+loaded the whole file, every write rewrote it, two writes at the same
+moment could overwrite each other, and there was no way to ask "posts by
+this author, newest first" without loading everything and filtering in
+JavaScript.
 
-- Every read loads the whole file; every write rewrites the whole file.
-- Two writes at the same moment can overwrite each other.
-- There is no way to ask "posts by this author, newest first" without
-  loading everything and filtering in JavaScript.
+Postgres fixes all of that, and it is still just a program on your laptop.
+It stores **tables** — grids of rows and columns — and you ask it questions
+in **SQL**.
 
-That is why real apps use SQLite or Postgres. **SQLite is the natural next
-step for this project**: it is still just a file on your laptop (no server
-to install), but it gives you real queries, transactions, and indexes.
+### The four tables (see `schema.sql`)
 
-To switch, you would replace `db.js` with a version using the
-`node:sqlite` module (built into Node 22+) or the `better-sqlite3` package,
-and change `load()`/`save()` into SQL queries. The routes in `server.js`
-would barely change — that separation is the payoff for the design.
+| Table | What it stores |
+| --- | --- |
+| `users` | id, name, username (unique), password hash |
+| `posts` | id, author, title, subtitle, body, status (draft/published) |
+| `claps` | one row per clap: post + user. The primary key on both columns is what enforces "one clap per user" — the database refuses a second row. |
+| `sessions` | id, user, expiry — the "you are logged in" records |
+
+### Try it yourself
+
+```sql
+-- see all posts
+SELECT id, title, status FROM posts;
+
+-- the feed query, the way the app asks it
+SELECT id, title FROM posts WHERE status = 'published' ORDER BY created_at DESC;
+
+-- how many claps does post 1 have? (the app asks this on every feed load)
+SELECT COUNT(*) FROM claps WHERE post_id = 1;
+
+-- who wrote the most posts?
+SELECT author_name, COUNT(*) FROM posts GROUP BY author_name;
+```
+
+Run them with `psql -d medium_clone -c "SELECT ..."`.
+
+### How the app talks to Postgres
+
+- `db.js` keeps a **pool** of connections open (via the `pg` library), so
+  requests do not pay the cost of connecting every time.
+- Every query uses **parameters** (`$1`, `$2`) instead of pasting values
+  into the SQL string. That is what stops SQL injection: a post title
+  containing `'; DROP TABLE posts; --` is treated as data, never as code.
+- `db.init()` runs `schema.sql` on startup, so the tables always exist
+  before the first request.
+- Only `db.js` writes SQL. `server.js` calls functions like
+  `listPublishedPosts()` and never sees a query string. That separation is
+  what made this migration a rewrite of one file instead of the whole app.
+
+### The migration
+
+`migrate.js` moved the old JSON data into Postgres (`npm run migrate`).
+It is worth reading: users first (posts reference them), then posts, then
+claps, then the id counters moved past the imported rows with `setval`.
+Password hashes transferred as-is, so nobody needed a new password.
 
 ---
 
@@ -112,9 +154,10 @@ and why "forgot password" always means "set a new one," never "we'll send
 you yours."
 
 **Sessions.** After a successful login, the server creates a random session
-id (a UUID), stores it next to your user id in `db.json`, and tells the
-browser to remember it. The session id is a temporary key, not your identity
-— it expires after 7 days and can be revoked by deleting it.
+id (a UUID), stores it as a row in the `sessions` table next to your user
+id, and tells the browser to remember it. The session id is a temporary
+key, not your identity — it expires after 7 days (the `expires_at`
+column) and can be revoked by deleting the row. Logging out deletes it.
 
 **Cookies.** The browser stores the session id in a cookie and sends it
 automatically with every request to the site. The server looks it up
@@ -207,16 +250,19 @@ That is the one option that puts your home network at risk.
 
 ## 9. What is not production-ready here (and why that is fine)
 
-- **The JSON database** — see lesson 4. Fine for learning, not for traffic.
+- **The database is on your laptop.** Anyone with access to your Postgres
+  can read everything. On a VPS, Postgres should listen on localhost only
+  (the default) and the password should be long and random.
 - **Markdown HTML is not sanitized** — see lesson 6.
 - **No rate limiting.** Anyone can hammer the signup route. A public site
   adds limits (e.g. `express-rate-limit`).
 - **No HTTPS locally.** On `localhost` that does not matter (the traffic
   never leaves your machine). On a VPS or tunnel, HTTPS is mandatory —
   Cloudflare Tunnel and any decent host provide it automatically.
-- **Sessions live in the database file.** Restarting is fine, but if you
-  ever run two servers they would not share sessions. Real apps use Redis
-  or database-backed sessions.
+- **Sessions live in the sessions table.** That already survives restarts,
+  but if you ever run two servers they would need to share the same
+  database — which, with Postgres, they do. (The old JSON version could
+  not say that.)
 - **Passwords have a minimum length but no strength rules.** Good enough
   for a local project; a public site wants more.
 
@@ -228,12 +274,13 @@ when you want it.
 
 ## 10. Where to go from here
 
-- Swap `db.js` for SQLite (lesson 4).
 - Add Google sign-in (lesson 7).
 - Add comments on posts — it is the same pattern as claps, with a new
-  collection in the database.
+  table in the database.
 - Add tags and a tag page — same pattern again.
-- Deploy it to a VPS (lesson 8) and give it a real domain.
+- Deploy it to a VPS (lesson 8) and give it a real domain. On the VPS,
+  Postgres runs the same way it does on your laptop — the app just points
+  `DATABASE_URL` at it.
 - When the single `server.js` gets too big, split routes into files
   (`routes/posts.js`, `routes/auth.js`) — that is the moment Express apps
   usually grow up.

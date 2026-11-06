@@ -6,9 +6,13 @@
 //   3. Routes at the bottom — one block per URL. A "route" is just:
 //      "when a request arrives at this URL with this method, run this code."
 //
+// The database is PostgreSQL now (see db.js). Every route handler is
+// async and awaits a db function instead of reading a file.
+//
 // Run it with:  npm start
 // Then open:    http://localhost:3000
 
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const { marked } = require('marked');
@@ -30,21 +34,18 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ---------------------------------------------------------------------------
 
 // Find the logged-in user from the session cookie, or null.
-// The browser sends the cookie automatically on every request.
-function getSessionUser(req) {
+// The browser sends the cookie automatically on every request; the
+// session id is looked up in the sessions table.
+async function getSessionUser(req) {
   const cookie = req.headers.cookie || '';
   const match = cookie.match(/(?:^|;\s*)session_id=([^;]+)/);
   if (!match) return null;
-
-  const data = db.load();
-  const session = data.sessions.find((s) => s.id === match[1]);
-  if (!session || session.expiresAt < Date.now()) return null;
-  return data.users.find((u) => u.id === session.userId) || null;
+  return db.getSessionUser(match[1]);
 }
 
 // Middleware: stop the request unless someone is logged in.
-function requireLogin(req, res, next) {
-  const user = getSessionUser(req);
+async function requireLogin(req, res, next) {
+  const user = await getSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in first.' });
   req.user = user;
   next();
@@ -55,26 +56,25 @@ function readingTime(text) {
   return Math.max(1, Math.round(words / 200)); // ~200 words per minute
 }
 
-// Shape a post for the API: attach the author, render Markdown to HTML,
-// and never send password hashes (they live on users, not posts, but the
-// rule is worth stating: only ever send what the page actually needs).
-function publicPost(data, post) {
-  const author = data.users.find((u) => u.id === post.authorId);
+// Shape a post row for the API: render Markdown to HTML, and never send
+// password hashes (they live on users, not posts, but the rule is worth
+// stating: only ever send what the page actually needs).
+function publicPost(row) {
   return {
-    id: post.id,
-    title: post.title,
-    subtitle: post.subtitle,
-    bodyHtml: marked.parse(post.body),
-    body: post.body,
-    status: post.status,
-    claps: post.claps,
-    clappedBy: post.clappedBy,
-    author: author
-      ? { username: author.username, name: author.name }
-      : { username: null, name: post.authorName || 'Unknown' },
-    createdAt: post.createdAt,
-    updatedAt: post.updatedAt,
-    readingTime: readingTime(post.body),
+    id: row.id,
+    title: row.title,
+    subtitle: row.subtitle,
+    bodyHtml: marked.parse(row.body),
+    body: row.body,
+    status: row.status,
+    claps: row.claps,
+    clappedBy: row.clapped_by || [],
+    author: row.author_username
+      ? { username: row.author_username, name: row.author_name }
+      : { username: null, name: row.author_name || 'Unknown' },
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    readingTime: readingTime(row.body),
   };
 }
 
@@ -91,7 +91,7 @@ function setSessionCookie(res, session) {
 // Auth routes
 // ---------------------------------------------------------------------------
 
-app.post('/api/auth/signup', (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
   const { name, username, password } = req.body || {};
   if (!name || !username || !password) {
     return res.status(400).json({ error: 'Name, username and password are required.' });
@@ -100,54 +100,44 @@ app.post('/api/auth/signup', (req, res) => {
     return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   }
 
-  const data = db.load();
-  if (data.users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
+  const existing = await db.getUserByUsername(username);
+  if (existing) {
     return res.status(400).json({ error: 'That username is taken.' });
   }
 
-  const user = {
-    id: data.nextUserId++,
+  const user = await db.createUser({
     name,
     username,
     passwordHash: auth.hashPassword(password),
-    createdAt: new Date().toISOString(),
-  };
-  data.users.push(user);
-  const session = auth.createSession(data, user.id);
-  db.save(data);
+  });
+  const session = await db.createSession(user.id);
 
   setSessionCookie(res, session);
   res.status(201).json({ user: { id: user.id, name: user.name, username: user.username } });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body || {};
-  const data = db.load();
-  const user = data.users.find((u) => u.username.toLowerCase() === (username || '').toLowerCase());
-  if (!user || !auth.checkPassword(password || '', user.passwordHash)) {
+  const user = await db.getUserByUsername(username || '');
+  if (!user || !auth.checkPassword(password || '', user.password_hash)) {
     return res.status(401).json({ error: 'Wrong username or password.' });
   }
-  const session = auth.createSession(data, user.id);
-  db.save(data);
+  const session = await db.createSession(user.id);
   setSessionCookie(res, session);
   res.json({ user: { id: user.id, name: user.name, username: user.username } });
 });
 
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
   const cookie = req.headers.cookie || '';
   const match = cookie.match(/(?:^|;\s*)session_id=([^;]+)/);
-  if (match) {
-    const data = db.load();
-    data.sessions = data.sessions.filter((s) => s.id !== match[1]);
-    db.save(data);
-  }
+  if (match) await db.deleteSession(match[1]);
   res.clearCookie('session_id', { path: '/' });
   res.json({ ok: true });
 });
 
 // Who am I right now? The frontend calls this on every page load.
-app.get('/api/auth/me', (req, res) => {
-  const user = getSessionUser(req);
+app.get('/api/auth/me', async (req, res) => {
+  const user = await getSessionUser(req);
   if (!user) return res.json({ user: null });
   res.json({ user: { id: user.id, name: user.name, username: user.username } });
 });
@@ -157,123 +147,94 @@ app.get('/api/auth/me', (req, res) => {
 // ---------------------------------------------------------------------------
 
 // Home feed: published posts, newest first.
-app.get('/api/posts', (req, res) => {
-  const data = db.load();
-  const posts = data.posts
-    .filter((p) => p.status === 'published')
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  res.json(posts.map((p) => publicPost(data, p)));
+app.get('/api/posts', async (req, res) => {
+  const posts = await db.listPublishedPosts();
+  res.json(posts.map(publicPost));
 });
 
 // My posts: drafts and published, mine only.
-app.get('/api/posts/mine', requireLogin, (req, res) => {
-  const data = db.load();
-  const posts = data.posts
-    .filter((p) => p.authorId === req.user.id)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  res.json(posts.map((p) => publicPost(data, p)));
+app.get('/api/posts/mine', requireLogin, async (req, res) => {
+  const posts = await db.listUserPosts(req.user.id);
+  res.json(posts.map(publicPost));
 });
 
 // One post. Drafts are only visible to their author.
-app.get('/api/posts/:id', (req, res) => {
-  const data = db.load();
-  const post = data.posts.find((p) => p.id === Number(req.params.id));
+app.get('/api/posts/:id', async (req, res) => {
+  const post = await db.getPost(Number(req.params.id));
   if (!post) return res.status(404).json({ error: 'Post not found.' });
   if (post.status !== 'published') {
-    const user = getSessionUser(req);
-    if (!user || user.id !== post.authorId) {
+    const user = await getSessionUser(req);
+    if (!user || user.id !== post.author_id) {
       return res.status(404).json({ error: 'Post not found.' });
     }
   }
-  res.json(publicPost(data, post));
+  res.json(publicPost(post));
 });
 
 // Write a post.
-app.post('/api/posts', requireLogin, (req, res) => {
+app.post('/api/posts', requireLogin, async (req, res) => {
   const { title, subtitle, body, status } = req.body || {};
   if (!title || !body) {
     return res.status(400).json({ error: 'Title and body are required.' });
   }
-  const data = db.load();
-  const post = {
-    id: data.nextPostId++,
+  const post = await db.createPost({
     authorId: req.user.id,
     authorName: req.user.name,
     title,
     subtitle: subtitle || '',
     body,
     status: status === 'published' ? 'published' : 'draft',
-    claps: 0,
-    clappedBy: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  data.posts.push(post);
-  db.save(data);
-  res.status(201).json(publicPost(data, post));
+  });
+  res.status(201).json(publicPost(post));
 });
 
 // Edit my post.
-app.put('/api/posts/:id', requireLogin, (req, res) => {
-  const data = db.load();
-  const post = data.posts.find((p) => p.id === Number(req.params.id));
+app.put('/api/posts/:id', requireLogin, async (req, res) => {
+  const post = await db.getPost(Number(req.params.id));
   if (!post) return res.status(404).json({ error: 'Post not found.' });
-  if (post.authorId !== req.user.id) {
+  if (post.author_id !== req.user.id) {
     return res.status(403).json({ error: 'That is not your post.' });
   }
   const { title, subtitle, body, status } = req.body || {};
-  if (title !== undefined) post.title = title;
-  if (subtitle !== undefined) post.subtitle = subtitle;
-  if (body !== undefined) post.body = body;
-  if (status === 'published' || status === 'draft') post.status = status;
-  post.updatedAt = new Date().toISOString();
-  db.save(data);
-  res.json(publicPost(data, post));
+  const updated = await db.updatePost(post.id, {
+    title,
+    subtitle,
+    body,
+    status: status === 'published' || status === 'draft' ? status : undefined,
+  });
+  res.json(publicPost(updated));
 });
 
 // Delete my post.
-app.delete('/api/posts/:id', requireLogin, (req, res) => {
-  const data = db.load();
-  const index = data.posts.findIndex((p) => p.id === Number(req.params.id));
-  if (index === -1) return res.status(404).json({ error: 'Post not found.' });
-  if (data.posts[index].authorId !== req.user.id) {
+app.delete('/api/posts/:id', requireLogin, async (req, res) => {
+  const post = await db.getPost(Number(req.params.id));
+  if (!post) return res.status(404).json({ error: 'Post not found.' });
+  if (post.author_id !== req.user.id) {
     return res.status(403).json({ error: 'That is not your post.' });
   }
-  data.posts.splice(index, 1);
-  db.save(data);
+  await db.deletePost(post.id);
   res.json({ ok: true });
 });
 
-// Clap for a post. One clap per user — clicking again does nothing new.
-app.post('/api/posts/:id/clap', requireLogin, (req, res) => {
-  const data = db.load();
-  const post = data.posts.find((p) => p.id === Number(req.params.id));
+// Clap for a post. One clap per user — the database enforces it.
+app.post('/api/posts/:id/clap', requireLogin, async (req, res) => {
+  const post = await db.getPost(Number(req.params.id));
   if (!post) return res.status(404).json({ error: 'Post not found.' });
-  if (!post.clappedBy.includes(req.user.id)) {
-    post.clappedBy.push(req.user.id);
-    post.claps = post.clappedBy.length;
-    db.save(data);
-    return res.json({ claps: post.claps, clapped: true });
-  }
-  res.json({ claps: post.claps, clapped: false });
+  const result = await db.clapPost(post.id, req.user.id);
+  res.json(result);
 });
 
 // ---------------------------------------------------------------------------
 // Profile route
 // ---------------------------------------------------------------------------
 
-app.get('/api/users/:username', (req, res) => {
-  const data = db.load();
-  const user = data.users.find(
-    (u) => u.username.toLowerCase() === req.params.username.toLowerCase()
-  );
+app.get('/api/users/:username', async (req, res) => {
+  const user = await db.getUserByUsername(req.params.username);
   if (!user) return res.status(404).json({ error: 'No such author.' });
-  const posts = data.posts
-    .filter((p) => p.authorId === user.id && p.status === 'published')
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const posts = (await db.listUserPosts(user.id)).filter((p) => p.status === 'published');
   res.json({
-    user: { id: user.id, name: user.name, username: user.username, createdAt: user.createdAt },
-    posts: posts.map((p) => publicPost(data, p)),
+    user: { id: user.id, name: user.name, username: user.username, createdAt: user.created_at },
+    posts: posts.map(publicPost),
   });
 });
 
@@ -281,8 +242,19 @@ app.get('/api/users/:username', (req, res) => {
 // Start the server
 // ---------------------------------------------------------------------------
 
-app.listen(PORT, () => {
-  console.log(`\n  Localhost is running!`);
-  console.log(`  Open http://localhost:${PORT} in your browser.`);
-  console.log(`  Stop it any time with Ctrl+C.\n`);
-});
+// Create the tables (and seed the welcome post) before accepting requests.
+db.init()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`\n  Localhost is running!`);
+      console.log(`  Open http://localhost:${PORT} in your browser.`);
+      console.log(`  Database: Postgres (${process.env.DATABASE_URL || 'postgres://localhost:5432/medium_clone'})`);
+      console.log(`  Stop it any time with Ctrl+C.\n`);
+    });
+  })
+  .catch((err) => {
+    console.error('Could not connect to Postgres. Is it running?');
+    console.error('Start it, create the database (createdb medium_clone), then try again.');
+    console.error(err.message);
+    process.exit(1);
+  });
