@@ -26,6 +26,9 @@ or newer.
   (Or with Homebrew: `brew install node`.)
 - **Windows:** download the LTS installer from <https://nodejs.org>, run it.
   Accept the defaults.
+- **Ubuntu:** Ubuntu's default repos carry an old Node, so install the LTS
+  from NodeSource:
+  `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`
 
 Check it worked:
 
@@ -50,7 +53,15 @@ database called `medium_clone`:
   `brew services start postgresql@16`, then `createdb medium_clone`.
 - **Windows:** download the installer from <https://www.postgresql.org/download/windows>,
   run it (remember the password you set for the `postgres` user), then open
-  "SQL Shell (psql)" and run `CREATE DATABASE medium_clone;`.
+  "SQL Shell (psql)" and run `CREATE DATABASE medium_clone;`. The installer
+  starts Postgres for you.
+- **Ubuntu:** `sudo apt-get install -y postgresql`, then
+  `sudo service postgresql start`, then
+  `sudo -u postgres psql -c "CREATE DATABASE medium_clone;"`.
+  Ubuntu's Postgres asks for a password on TCP connections, so set one for
+  the `postgres` user:
+  `sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'yourpassword';"`
+  and put it in `.env` (see below).
 - **Docker (any OS):**
   `docker run --name medium-clone-db -e POSTGRES_DB=medium_clone -p 5432:5432 -d postgres:16`
 
@@ -60,11 +71,15 @@ Check it worked:
 psql -d medium_clone -c "SELECT version();"
 ```
 
+(On Ubuntu, run that as `sudo -u postgres psql -d medium_clone -c "SELECT version();"`
+— see the peer-auth note in Troubleshooting.)
+
 The app connects with `DATABASE_URL` (see `.env.example`). The default is
 `postgres://localhost:5432/medium_clone` — no password — which works when
-your Postgres trusts local connections (Homebrew's default). If yours asks
-for a password, copy `.env.example` to `.env` and put your credentials in
-the URL, e.g. `DATABASE_URL=postgres://postgres:YOURPASSWORD@localhost:5432/medium_clone`.
+your Postgres trusts local connections (Homebrew's default). On Ubuntu and
+Windows, Postgres requires a password over TCP, so copy `.env.example` to
+`.env` and put your credentials in the URL, e.g.
+`DATABASE_URL=postgres://postgres:YOURPASSWORD@localhost:5432/medium_clone`.
 
 ### 3. Install dependencies
 
@@ -202,8 +217,15 @@ Only five, all pure JavaScript (nothing to compile):
   postgresql@16` and reopen the terminal.
 - **"Could not connect to Postgres. Is it running?"** — Postgres is
   installed but not started. Mac: `brew services start postgresql@16`.
-  Windows: start it from the Services app or the installer. Docker:
-  `docker start medium-clone-db`.
+  Windows: start it from the Services app or the installer. Ubuntu:
+  `sudo service postgresql start` (or `sudo systemctl start postgresql`).
+  Docker: `docker start medium-clone-db`.
+- **On Ubuntu, `psql` says "Peer authentication failed"** — Ubuntu's
+  Postgres checks that your OS user matches the Postgres user for local
+  socket connections. Either run psql as the postgres user
+  (`sudo -u postgres psql -d medium_clone`) or connect over TCP with a
+  password in `.env` — the app always connects over TCP, so the `.env`
+  route is the one that matters for the server.
 - **`database "medium_clone" does not exist`** — create it:
   `createdb medium_clone` (or `CREATE DATABASE medium_clone;` in psql).
 - **Password authentication failed** — your Postgres wants a password.
