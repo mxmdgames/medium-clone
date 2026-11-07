@@ -209,6 +209,16 @@ Only five, all pure JavaScript (nothing to compile):
 - **Password authentication failed** — your Postgres wants a password.
   Copy `.env.example` to `.env` and set `DATABASE_URL` with your
   username and password in it.
+- **SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string** —
+  same cause, different symptom: Postgres is asking for a password, but
+  the app didn't send one at all, because your `DATABASE_URL` has no
+  password in it. Copy `.env.example` to `.env` and put your Postgres
+  password in the URL:
+  `DATABASE_URL=postgres://postgres:YOURPASSWORD@localhost:5432/medium_clone`
+  (use the password you set when installing Postgres — on Windows that's
+  the installer password). Then restart the server. If your password
+  contains `@`, `:`, `/`, `#` or `%`, URL-encode it (`@` → `%40`) or the
+  URL will parse wrong.
 - **`EADDRINUSE` / port 3000 already in use** — another copy of the server
   is running, or something else uses port 3000. Stop the other one, or run
   `PORT=4000 npm start` and open <http://localhost:4000>.
