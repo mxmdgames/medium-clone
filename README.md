@@ -226,6 +226,14 @@ Only five, all pure JavaScript (nothing to compile):
   (`sudo -u postgres psql -d medium_clone`) or connect over TCP with a
   password in `.env` — the app always connects over TCP, so the `.env`
   route is the one that matters for the server.
+- **"FATAL: role \"ubuntu\" does not exist" (createdb fails on Ubuntu)** —
+  Ubuntu's Postgres uses peer auth, so your OS user needs a matching
+  Postgres role. Create one for yourself (swap `ubuntu` for your own
+  username, and pick a real password — this is the password your `.env`
+  will use):
+  `sudo -u postgres psql -c "CREATE USER ubuntu WITH SUPERUSER PASSWORD 'yourpassword';"`
+  Then `createdb medium_clone` works, and your `DATABASE_URL` uses that
+  username: `DATABASE_URL=postgres://ubuntu:YOURPASSWORD@localhost:5432/medium_clone`.
 - **`database "medium_clone" does not exist`** — create it:
   `createdb medium_clone` (or `CREATE DATABASE medium_clone;` in psql).
 - **Password authentication failed** — your Postgres wants a password.
