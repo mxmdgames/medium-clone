@@ -241,6 +241,24 @@ Only five, all pure JavaScript (nothing to compile):
   the installer password). Then restart the server. If your password
   contains `@`, `:`, `/`, `#` or `%`, URL-encode it (`@` → `%40`) or the
   URL will parse wrong.
+
+  To create `.env` with nano, from inside the project folder:
+
+  ```bash
+  nano .env
+  ```
+
+  Type this line (swap in your real Postgres password):
+
+  ```
+  DATABASE_URL=postgres://postgres:YOURPASSWORD@localhost:5432/medium_clone
+  ```
+
+  Then save and exit: `Ctrl+O`, press `Enter` to confirm the filename,
+  then `Ctrl+X`. Check it saved with `cat .env`, then stop the server
+  (`Ctrl+C` in its terminal) and start it again with `npm start`. `.env`
+  is in `.gitignore`, so your password never gets committed — only
+  `.env.example` is in the repo.
 - **`EADDRINUSE` / port 3000 already in use** — another copy of the server
   is running, or something else uses port 3000. Stop the other one, or run
   `PORT=4000 npm start` and open <http://localhost:4000>.
